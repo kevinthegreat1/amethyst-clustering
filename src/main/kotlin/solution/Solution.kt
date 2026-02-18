@@ -159,7 +159,7 @@ data class Solution(val proj: GeodeProjection, var groups: MutableList<SolutionG
                 when (proj[x, y]) {
                     BlockType.AIR -> {
                         val color = findColor(Vec2(x, y))
-                        print("$color  $ANSI_RESET")
+                        print("$color\u00A0\u00A0$ANSI_RESET")
                     }
 
                     BlockType.CRYSTAL -> {
