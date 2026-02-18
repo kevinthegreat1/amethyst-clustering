@@ -16,8 +16,8 @@ class ThemorlockSolver : Solver {
     private val MIN_ISLAND_SIZE = 4
     private val MAX_ISLAND_SIZE = 12
     private val MAX_SHAPES_PER_TARGET = 1000
-    private val TIMEOUT_MS = 1_000L // Shorter default timeout
-    private val ISLAND_COST = 1.0 // Cost penalty per island to encourage larger islands
+    private val TIMEOUT_MS = 10_000L
+    private val ISLAND_COST = 1.0
 
     // --- Internal State ---
     private lateinit var gridBounds: GridBounds
