@@ -1,22 +1,19 @@
-import geode.Geode
 import geode.GeodeProjection
 import solution.Solution
 import solution.Solver
-import solvers.IterniamSolver
-import solvers.MLFlexerSolver
-import solvers.PalaniJohnsonSolver
-import solvers.UselessSolver
+import solvers.*
 import kotlin.math.roundToInt
 
 const val PUSH_LIMIT = 12
 
 fun main() {
     testSolvers(
-//        UselessSolver(),
-//        MLFlexerSolver(),
-//        MLFlexerSolver(merge = false),
-//        PalaniJohnsonSolver(),
-        IterniamSolver(tries = 20)
+        UselessSolver(),
+        MLFlexerSolver(),
+        MLFlexerSolver(merge = false),
+        PalaniJohnsonSolver(),
+        IterniamSolver(tries = 20),
+        ThemorlockSolver(),
     )
 }
 
