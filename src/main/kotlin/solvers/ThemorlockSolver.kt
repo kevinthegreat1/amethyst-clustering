@@ -34,11 +34,14 @@ class ThemorlockSolver : Solver {
     private var backtrackCalls: Long = 0
     private var timedOut: Boolean = false
 
-    // Directions: Right, Left, Down, Up
-    private val DIRECTION_OFFSETS = listOf(Vec2(1, 0), Vec2(-1, 0), Vec2(0, 1), Vec2(0, -1))
-
     override fun solve(proj: GeodeProjection): Solution {
+        bestScore = Double.NEGATIVE_INFINITY
+        bestSolution = mutableListOf()
+        bestSolutionSlimeMask = BitSet()
+        bestSolutionHoneyMask = BitSet()
         startTime = System.currentTimeMillis()
+        backtrackCalls = 0
+        timedOut = false
 
         // 1. Initialize Grid System (Mapping Vec2 <-> Flat Index)
         gridBounds = GridBounds(proj.xRange, proj.yRange)
@@ -96,6 +99,22 @@ class ThemorlockSolver : Solver {
         }.toMutableList()
 
         return Solution(proj, resultGroups)
+    }
+
+    // --- Flat Index Neighbor Iteration ---
+
+    /**
+     * Iterates over all 4-connected neighbors of the given flat index,
+     * performing bounds checking via row/col arithmetic to avoid Vec2 allocation.
+     */
+    private inline fun forEachFlatNeighbor(flat: Int, action: (Int) -> Unit) {
+        val w = gridBounds.width
+        val col = flat % w
+        val row = flat / w
+        if (col < w - 1) action(flat + 1)              // right
+        if (col > 0) action(flat - 1)                    // left
+        if (row < gridBounds.height - 1) action(flat + w) // down
+        if (row > 0) action(flat - w)                    // up
     }
 
     // --- Shape Generation ---
@@ -161,15 +180,10 @@ class ThemorlockSolver : Solver {
     private fun getNeighbors(cells: Set<Int>): Set<Int> {
         val neighbors = mutableSetOf<Int>()
         for (cell in cells) {
-            val vec = gridBounds.toVec(cell)
-            for (offset in DIRECTION_OFFSETS) {
-                val nVec = Vec2(vec.x + offset.x, vec.y + offset.y)
-                if (gridBounds.isInBounds(nVec)) {
-                    val nIdx = gridBounds.toFlat(nVec)
-                    // Can expand into AIR or CRYSTAL, not BUD
-                    if (grid[nIdx] != BlockType.BUD && nIdx !in cells) {
-                        neighbors.add(nIdx)
-                    }
+            forEachFlatNeighbor(cell) { n ->
+                // Can expand into AIR or CRYSTAL, not BUD
+                if (grid[n] != BlockType.BUD && n !in cells) {
+                    neighbors.add(n)
                 }
             }
         }
@@ -181,62 +195,58 @@ class ThemorlockSolver : Solver {
      * Returns the geometry details or null if no valid configuration exists in the blob.
      */
     private fun findFlyingMachine(cells: Set<Int>): FlyingMachine? {
+        val w = gridBounds.width
+        val h = gridBounds.height
+
         for (key in cells) {
-            val keyVec = gridBounds.toVec(key)
+            val col = key % w
+            val row = key / w
 
-            // Only check 2 non-redundant stem directions (right and down)
-            for (dirIdx in intArrayOf(0, 2)) {
-                val dir = DIRECTION_OFFSETS[dirIdx]
-                val prevVec = Vec2(keyVec.x - dir.x, keyVec.y - dir.y)
-                val nextVec = Vec2(keyVec.x + dir.x, keyVec.y + dir.y)
-
-                if (!gridBounds.isInBounds(prevVec) || !gridBounds.isInBounds(nextVec)) continue
-
-                val prevKey = gridBounds.toFlat(prevVec)
-                val nextKey = gridBounds.toFlat(nextVec)
-
-                if (cells.contains(prevKey) && cells.contains(nextKey)) {
-                    val stemCells = setOf(prevKey, key, nextKey)
-                    val perpDir = DIRECTION_OFFSETS[2 - dirIdx]
-
-                    // 1. Check one side (perpDir) - prev, center, next
-                    for (stemVec in listOf(prevVec, keyVec, nextVec)) {
-                        val cornerVec = Vec2(stemVec.x + perpDir.x, stemVec.y + perpDir.y)
-                        if (gridBounds.isInBounds(cornerVec)) {
-                            val cornerKey = gridBounds.toFlat(cornerVec)
-                            if (cells.contains(cornerKey)) {
-                                return createFlyingMachine(stemCells, cornerKey)
-                            }
-                        }
+            // Horizontal stem (delta = 1): prev=key-1, key, next=key+1
+            if (col >= 1 && col < w - 1) {
+                val prev = key - 1
+                val next = key + 1
+                if (prev in cells && next in cells) {
+                    val stemCells = setOf(prev, key, next)
+                    // 1. Check perpendicular down (+w)
+                    if (row < h - 1) {
+                        if (prev + w in cells) return createFlyingMachine(stemCells, prev + w)
+                        if (key + w in cells) return createFlyingMachine(stemCells, key + w)
+                        if (next + w in cells) return createFlyingMachine(stemCells, next + w)
                     }
-
-                    // 2. Check other side (-perpDir) - prev, center, next
-                    for (stemVec in listOf(prevVec, keyVec, nextVec)) {
-                        val cornerVec = Vec2(stemVec.x - perpDir.x, stemVec.y - perpDir.y)
-                        if (gridBounds.isInBounds(cornerVec)) {
-                            val cornerKey = gridBounds.toFlat(cornerVec)
-                            if (cells.contains(cornerKey)) {
-                                return createFlyingMachine(stemCells, cornerKey)
-                            }
-                        }
+                    // 2. Check perpendicular up (-w)
+                    if (row > 0) {
+                        if (prev - w in cells) return createFlyingMachine(stemCells, prev - w)
+                        if (key - w in cells) return createFlyingMachine(stemCells, key - w)
+                        if (next - w in cells) return createFlyingMachine(stemCells, next - w)
                     }
+                    // 3. End sides (1x4 case)
+                    if (col >= 2 && prev - 1 in cells) return createFlyingMachine(stemCells, prev - 1)
+                    if (col < w - 2 && next + 1 in cells) return createFlyingMachine(stemCells, next + 1)
+                }
+            }
 
-                    // 3. Check end sides (1x4 case)
-                    val endPrevVec = Vec2(prevVec.x - dir.x, prevVec.y - dir.y)
-                    if (gridBounds.isInBounds(endPrevVec)) {
-                        val endPrevKey = gridBounds.toFlat(endPrevVec)
-                        if (cells.contains(endPrevKey)) {
-                            return createFlyingMachine(stemCells, endPrevKey)
-                        }
+            // Vertical stem (delta = w): prev=key-w, key, next=key+w
+            if (row >= 1 && row < h - 1) {
+                val prev = key - w
+                val next = key + w
+                if (prev in cells && next in cells) {
+                    val stemCells = setOf(prev, key, next)
+                    // 1. Check perpendicular right (+1)
+                    if (col < w - 1) {
+                        if (prev + 1 in cells) return createFlyingMachine(stemCells, prev + 1)
+                        if (key + 1 in cells) return createFlyingMachine(stemCells, key + 1)
+                        if (next + 1 in cells) return createFlyingMachine(stemCells, next + 1)
                     }
-
-                    val endNextVec = Vec2(nextVec.x + dir.x, nextVec.y + dir.y)
-                    if (gridBounds.isInBounds(endNextVec)) {
-                        val endNextKey = gridBounds.toFlat(endNextVec)
-                        if (cells.contains(endNextKey)) {
-                            return createFlyingMachine(stemCells, endNextKey)
-                        }
+                    // 2. Check perpendicular left (-1)
+                    if (col > 0) {
+                        if (prev - 1 in cells) return createFlyingMachine(stemCells, prev - 1)
+                        if (key - 1 in cells) return createFlyingMachine(stemCells, key - 1)
+                        if (next - 1 in cells) return createFlyingMachine(stemCells, next - 1)
                     }
+                    // 3. End sides (1x4 case)
+                    if (row >= 2 && prev - w in cells) return createFlyingMachine(stemCells, prev - w)
+                    if (row < h - 2 && next + w in cells) return createFlyingMachine(stemCells, next + w)
                 }
             }
         }
@@ -251,16 +261,8 @@ class ThemorlockSolver : Solver {
         for (cell in cells) {
             mask.set(cell)
             if (grid[cell] == BlockType.CRYSTAL) crystalsCovered++
-
-            val vec = gridBounds.toVec(cell)
-            for (dir in DIRECTION_OFFSETS) {
-                val nVec = Vec2(vec.x + dir.x, vec.y + dir.y)
-                if (gridBounds.isInBounds(nVec)) {
-                    val nIdx = gridBounds.toFlat(nVec)
-                    if (nIdx !in cells) {
-                        neighborsMask.set(nIdx)
-                    }
-                }
+            forEachFlatNeighbor(cell) { n ->
+                if (n !in cells) neighborsMask.set(n)
             }
         }
         return Shape(cells, mask, neighborsMask, crystalsCovered, flyingMachine)
@@ -272,15 +274,8 @@ class ThemorlockSolver : Solver {
 
         for (cell in stemCells) {
             stemMask.set(cell)
-            val vec = gridBounds.toVec(cell)
-            for (dir in DIRECTION_OFFSETS) {
-                val nVec = Vec2(vec.x + dir.x, vec.y + dir.y)
-                if (gridBounds.isInBounds(nVec)) {
-                    val nIdx = gridBounds.toFlat(nVec)
-                    if (nIdx !in stemCells) {
-                        stemNeighborsMask.set(nIdx)
-                    }
-                }
+            forEachFlatNeighbor(cell) { n ->
+                if (n !in stemCells) stemNeighborsMask.set(n)
             }
         }
         return FlyingMachine(stemCells, stemMask, stemNeighborsMask, stopperCell)
@@ -522,15 +517,8 @@ class ThemorlockSolver : Solver {
      * Used during hill climbing to check same-material adjacency constraints.
      */
     private fun isAdjacentToSameMaterial(materialMask: BitSet, excluding: BitSet, key: Int): Boolean {
-        val vec = gridBounds.toVec(key)
-        for (dir in DIRECTION_OFFSETS) {
-            val adjVec = Vec2(vec.x + dir.x, vec.y + dir.y)
-            if (gridBounds.isInBounds(adjVec)) {
-                val bit = gridBounds.toFlat(adjVec)
-                if (materialMask[bit] && !excluding[bit]) {
-                    return true
-                }
-            }
+        forEachFlatNeighbor(key) { n ->
+            if (materialMask[n] && !excluding[n]) return true
         }
         return false
     }
@@ -549,15 +537,8 @@ class ThemorlockSolver : Solver {
 
         while (queue.isNotEmpty()) {
             val current = queue.poll()
-            val vec = gridBounds.toVec(current)
-            for (dir in DIRECTION_OFFSETS) {
-                val nVec = Vec2(vec.x + dir.x, vec.y + dir.y)
-                if (gridBounds.isInBounds(nVec)) {
-                    val neighbor = gridBounds.toFlat(nVec)
-                    if (neighbor in cells && visited.add(neighbor)) {
-                        queue.add(neighbor)
-                    }
-                }
+            forEachFlatNeighbor(current) { n ->
+                if (n in cells && visited.add(n)) queue.add(n)
             }
         }
 
