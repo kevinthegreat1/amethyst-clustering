@@ -382,18 +382,15 @@ class ThemorlockSolver : Solver {
 
             bestSolution = ArrayList<Island?>(bestSolution.filterNotNull().sortedBy { it.cells.size })
 
-            var i = 0
-            while (i < bestSolution.size) {
+            for (i in 0..<bestSolution.size) {
                 val island = bestSolution[i]
                 if (island == null || island.cells.size >= MAX_ISLAND_SIZE) {
-                    i++
                     continue
                 }
 
                 val materialMask = if (island.material == Material.SLIME) bestSolutionSlimeMask else bestSolutionHoneyMask
 
                 val neighbors = getNeighbors(island.cells)
-                var stayAtSameIndex = false
                 for (n in neighbors) {
                     if (isAdjacentToSameMaterial(materialMask, island.mask, n)) continue
 
@@ -417,14 +414,11 @@ class ThemorlockSolver : Solver {
                     }
 
                     // Try stealing this cell from the neighboring island
-                    if (tryTakeCell(i, island, n, j, neighboring)) {
-                        stayAtSameIndex = true
+                    if (neighboring.cells.size >= island.cells.size + 2 && tryTakeCell(i, island, n, j, neighboring)) {
+                        improved = true
                         break
                     }
                 }
-
-                if (stayAtSameIndex) continue
-                i++
             }
         }
     }
